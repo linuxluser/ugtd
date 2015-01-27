@@ -163,6 +163,7 @@ class Task(urwid.WidgetPlaceholder):
     """Update this Task instance with a new task string S."""
     # In cases of empty string we assign empty results
     if not S:
+      self.text            = ''
       self.completed       = False
       self.completion_date = None
       self.creation_date   = None
