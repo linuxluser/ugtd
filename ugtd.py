@@ -278,23 +278,35 @@ class TaskEdit(urwid.Edit):
     elif key == 'ctrl b':
       self.set_edit_pos(self.edit_pos - 1)
 
-    # Decrease priority
-    # FIXME: deal with completed tasks too
-    elif key in ('meta +', 'meta up'):
+    # Change priority
+    elif key in ('+', 'up', '-', 'down'):
+      text = self.edit_text
       if not text.startswith('x '):
-        text = self.edit_text
         pos = self.edit_pos
         pri = text[:4]
         if pri[0] == '(' and pri[2] == ')' and pri[3] == ' ':
           priority = pri[1].upper()
-          if priority != 'Z':
-            priority = chr(ord(pri[1].upper()) + 1)
-          text = text[4:]
         else:
-          priority = 'A'
-          pos = pos + 4
-        self.set_edit_text('(%s) %s' % (priority, text))
-        self.set_edit_pos(pos)
+          priority = None
+
+        # Decrease priority
+        if key in ('+', 'up'):
+          if priority is None:
+            self.set_edit_text('(A) %s' % text)
+            self.set_edit_pos(pos + 4)
+          elif priority != 'Z':
+            priority = chr(ord(pri[1].upper()) + 1)
+            self.set_edit_text('(%s) %s' % (priority, text[4:]))
+
+        # Increase priority
+        if key in ('-', 'down'):
+          if priority:
+            if priority == 'A':
+              self.set_edit_text(text[4:])
+              self.set_edit_pos(pos - 4)
+            else:
+              priority = chr(ord(pri[1].upper()) - 1)
+              self.set_edit_text('(%s) %s' % (priority, text[4:]))
 
     else:
       return super(TaskEdit, self).keypress(size, key)
@@ -361,8 +373,8 @@ class VimNavigationListBox(urwid.ListBox):
         self._task = None
         self._mode = 'nav'
 
-      # Ignore standard ListBox navigation key presses
-      elif key in ('up', 'down', 'page up', 'page down'):
+      # Ignore standard ListBox navigation key presses not handled by edit widget
+      elif key in ('page up', 'page down'):
         return
 
       # Any unhandled keys get passed on (and handled by Edit widget directly)
