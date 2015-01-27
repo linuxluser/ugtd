@@ -302,6 +302,17 @@ class TaskEdit(urwid.Edit):
 class VimNavigationListBox(urwid.ListBox):
   """ListBox that also accepts vim navigation keys."""
 
+  VIM_KEYS = {
+      'k'     : 'up',
+      'j'     : 'down',
+      'ctrl u': 'page up',
+      'ctrl b': 'page up',
+      'ctrl d': 'page down',
+      'ctrl f': 'page down',
+      'h'     : 'left',
+      'l'     : 'right',
+  }
+
   def __init__(self, items, panel):
     self.items = items
     self._panel = panel
@@ -314,17 +325,27 @@ class VimNavigationListBox(urwid.ListBox):
     return widget
 
   def keypress(self, size, key):
-    # Enter 'edit' mode
-    if key == 'enter' and self._mode == 'nav':
-      if isinstance(self.focus, Task):
+    ###################
+    ### NAV MODE
+    if self._mode == 'nav':
+      # Enter 'edit' mode
+      if key == 'enter' and isinstance(self.focus, Task):
         self._task = self.focus
         edit_widget = self._BuildEditWidget(self._task)
         self.items[self.focus_position] = edit_widget
         self._mode = 'edit'
-        return
 
-    # Exit 'edit' mode
-    if self._mode == 'edit':
+      # Vim navigation translation
+      if self.VIM_KEYS.has_key(key):
+        key = self.VIM_KEYS[key]
+
+      return super(VimNavigationListBox, self).keypress(size, key)
+
+
+    ###################
+    ### EDIT MODE
+    elif self._mode == 'edit':
+      # Save changes and exit edit mode
       if key == 'enter':
         edit_widget = self.focus.original_widget
         if self._task.text != edit_widget.get_edit_text():
@@ -332,32 +353,20 @@ class VimNavigationListBox(urwid.ListBox):
         self.items[self.focus_position] = self._task
         self._task = None
         self._mode = 'nav'
-        return
+
+      # Cancel and discard edits
       elif key == 'esc':
         self.items[self.focus_position] = self._task
         self._task = None
         self._mode = 'nav'
+
+      # Ignore standard ListBox navigation key presses
+      elif key in ('up', 'down', 'page up', 'page down'):
         return
 
-    # Vim navigation key translation
-    if self._mode == 'nav':
-      if key == 'k':
-        key = 'up'
-      elif key == 'j':
-        key = 'down'
-      elif key in ('ctrl u', 'ctrl b'):
-        key = 'page up'
-      elif key in ('ctrl d', 'ctrl f'):
-        key = 'page down'
-      elif key == 'h':
-        key = 'left'
-      elif key == 'l':
-        key = 'right'
-
-    if self._mode == 'edit':
-      return
-    else:
-      return super(VimNavigationListBox, self).keypress(size, key)
+      # Any unhandled keys get passed on (and handled by Edit widget directly)
+      else:
+        return super(VimNavigationListBox, self).keypress(size, key)
 
 
 class KeywordPanel(urwid.WidgetPlaceholder):
