@@ -119,6 +119,8 @@ class Task(urwid.WidgetPlaceholder):
         else:
           priority = None
         line_stripped = line_stripped[end_pri+1:].strip()
+      else:
+        priority = None
     else:
       priority = None
 
@@ -329,13 +331,38 @@ class VimNavigationListBox(urwid.ListBox):
   def __init__(self, items, panel):
     self.items = items
     self._panel = panel
-    self._mode = 'nav'
+    self.edit_mode = False
     super(VimNavigationListBox, self).__init__(items)
 
-  def _BuildEditWidget(self, task):
-    widget = TaskEdit(task)
-    widget = urwid.AttrMap(widget, 'editbox', 'editbox')
-    return widget
+  def keypress(self, size, key):
+    if self.edit_mode:
+      # Ignore page up/down in edit mode
+      if key in ('page up', 'page down'):
+        return
+
+    # Vim navigation translation
+    else:
+      if self.VIM_KEYS.has_key(key):
+        key = self.VIM_KEYS[key]
+
+
+    return super(VimNavigationListBox, self).keypress(size, key)
+
+
+class TaskPile(urwid.Pile):
+  """An urwid.Pile that handles groups of Tasks and editing them."""
+
+  def __init__(self, tasks, group, tasklistbox):
+    self.group = group
+    self.tasks = tasks
+    self.tasklistbox = tasklistbox
+    self.items = [urwid.Text(group)]
+    self.items.extend(tasks)
+    self.items.append(urwid.Divider())
+    super(TaskPile, self).__init__(self.items)
+
+    # Start out in 'nav' mode
+    self._mode = 'nav'
 
   def keypress(self, size, key):
     ###################
@@ -345,41 +372,96 @@ class VimNavigationListBox(urwid.ListBox):
       if key == 'enter' and isinstance(self.focus, Task):
         self._task = self.focus
         edit_widget = self._BuildEditWidget(self._task)
-        self.items[self.focus_position] = edit_widget
+        self.contents[self.focus_position] = (edit_widget, ('pack', None))
         self._mode = 'edit'
+        self.tasklistbox.edit_mode = True
 
-      # Vim navigation translation
-      if self.VIM_KEYS.has_key(key):
-        key = self.VIM_KEYS[key]
-
-      return super(VimNavigationListBox, self).keypress(size, key)
-
+      return super(TaskPile, self).keypress(size, key)
 
     ###################
     ### EDIT MODE
     elif self._mode == 'edit':
-      # Save changes and exit edit mode
-      if key == 'enter':
-        edit_widget = self.focus.original_widget
-        if self._task.text != edit_widget.get_edit_text():
-          self._task.UpdateFromString(edit_widget.get_edit_text())
-        self.items[self.focus_position] = self._task
-        self._task = None
-        self._mode = 'nav'
 
-      # Cancel and discard edits
-      elif key == 'esc':
-        self.items[self.focus_position] = self._task
-        self._task = None
-        self._mode = 'nav'
+      # Exit edit mode
+      if key in ('enter', 'esc'):
+        # Submit changes if any
+        if key == 'enter':
+          edit_widget = self.focus.original_widget
+          if self._task.text != edit_widget.get_edit_text():
+            # Get before/after properties and update the task itself
+            old_properties = self._task.__dict__.copy()
+            self._task.UpdateFromString(edit_widget.get_edit_text())
+            new_properties = self._task.__dict__.copy()
+            # Start a chain reaction so all widgets can deal with the changes
+            self.tasklistbox.DoTaskChangeWork(old_properties, new_properties)
 
-      # Ignore standard ListBox navigation key presses not handled by edit widget
-      elif key in ('page up', 'page down'):
+        self.contents[self.focus_position] = (self._task, ('pack', None))
+        self._task = None
+        self.tasklistbox.edit_mode = False
+        self._mode = 'nav'
         return
 
-      # Any unhandled keys get passed on (and handled by Edit widget directly)
+      return super(TaskPile, self).keypress(size, key)
+
+  def _BuildEditWidget(self, task):
+    widget = TaskEdit(task)
+    widget = urwid.AttrMap(widget, 'editbox', 'editbox')
+    return widget
+
+
+class TaskListBox(VimNavigationListBox):
+  """
+  """
+
+  def __init__(self, piles, panel, category, keyword, grouping):
+    # 'items' -> 'tasks'
+    # new 'piles'
+    self.piles = piles
+    self.category = category
+    self.keyword = keyword
+    self.grouping = grouping
+    self._mode = 'nav'
+    super(TaskListBox, self).__init__(piles, panel)
+
+  def _BuildEditWidget(self, task):
+    widget = TaskEdit(task)
+    widget = urwid.AttrMap(widget, 'editbox', 'editbox')
+    return widget
+
+  def DoTaskChangeWork(self, old_properties, new_properties):
+    ########################
+    ### Added task
+    if not old_properties:
+      groups_added_to = new_properties[self.grouping]
+      if not hasattr(groups_added_to, '__iter__'):
+        groups_added_to = [groups_added_to]
+      groups_removed_from = []
+
+    ########################
+    ### Deleted task
+    elif not new_properties:
+      groups_removed_from = old_properties[self.grouping]
+      if not hasattr(groups_removed_from, '__iter__'):
+        groups_removed_from = [groups_removed_from]
+      groups_added_to = []
+
+    ########################
+    ### Modified task
+    else:
+      old_group = old_properties[self.grouping]
+      new_group = new_properties[self.grouping]
+      if hasattr(old_group, '__iter__'):
+        groups_removed_from = set(old_group) - set(new_group)
+        groups_removed_from = sorted(groups_removed_from)
+        groups_added_to = set(new_group) - set(old_group)
+        groups_added_to = sorted(groups_added_to)
       else:
-        return super(VimNavigationListBox, self).keypress(size, key)
+        if old_group != new_group:
+          groups_removed_from = [old_group]
+          groups_added_to = [new_group]
+        else:
+          groups_removed_from = []
+          groups_added_to = []
 
 
 class KeywordPanel(urwid.WidgetPlaceholder):
@@ -481,19 +563,25 @@ class TaskPanel(urwid.WidgetPlaceholder):
         # Sort tasks in each group by 'sorting'
         for group_tasks in groups.values():
           group_tasks.sort(key=lambda t: getattr(t, sorting))
+
         # Create a ListBox from groups
-        listbox_items = []
+        piles = []
         for group in sorted(groups):
           if group is None:
             group_label = u'--none--'
           else:
             group_label = unicode(group)
-          listbox_items.append(urwid.Text(group_label))
-          listbox_items.extend(groups[group])
-          listbox_items.append(urwid.Divider())
+          pile = TaskPile(groups[group], group_label, None)
+          piles.append(pile)
+
         # Add listbox to our set of ListBoxes
         key = (category, keyword, grouping)
-        self._listboxes[key] = VimNavigationListBox(listbox_items, self)
+        listbox = TaskListBox(piles, self, category, keyword, grouping)
+        self._listboxes[key] = listbox
+
+        # Ensure all piles have a reference to the listbox
+        for pile in piles:
+          pile.tasklistbox = listbox 
 
     # Create decorative widgets and initialize ourselves
     self.padding_widget = urwid.Padding(urwid.SolidFill(u'x'), left=1, right=1)
@@ -504,8 +592,22 @@ class TaskPanel(urwid.WidgetPlaceholder):
     self.grouping = ''
     self.sorting = ''
 
-  #def keypress(self, size, key):
-  #  return super(TaskPanel, self).keypress(size, key)
+  def DoTaskChangeWork(self, old_properties, new_properties):
+    ########################
+    ### Added task
+    if not old_properties:
+      return
+
+    ########################
+    ### Deleted task
+    elif not new_properties:
+      return
+
+    ########################
+    ### Modified task
+    else:
+      for listbox in self._listboxes.values():
+        listbox.DoTaskChangeWork(old_properties, new_properties)
 
   def SelectView(self, category, grouping):
     self.keyword_panel.SwitchCategories(category)
