@@ -3,6 +3,7 @@
 
 import collections
 import datetime
+import inspect
 import itertools
 import os
 import string
@@ -413,15 +414,16 @@ class TaskListBox(VimNavigationListBox):
   """
   """
 
-  def __init__(self, piles, panel, category, keyword, grouping):
+  def __init__(self, piles, taskpanel, category, keyword, grouping):
     # 'items' -> 'tasks'
     # new 'piles'
     self.piles = piles
+    self.taskpanel = taskpanel
     self.category = category
     self.keyword = keyword
     self.grouping = grouping
     self._mode = 'nav'
-    super(TaskListBox, self).__init__(piles, panel)
+    super(TaskListBox, self).__init__(piles, taskpanel)
 
   def _BuildEditWidget(self, task):
     widget = TaskEdit(task)
@@ -635,6 +637,11 @@ class TaskPanel(urwid.WidgetPlaceholder):
 
 
 class ViewPanel(Border):
+  """Top panel with selectable 'views' on Task data.
+
+  The ViewPanel has a reference to the TaskPanel so that when the view is
+  changed, that event can be passed on to the TaskPanel to react to it.
+  """
 
   #            LABEL   -  CATEGORY  -  GROUPING
   VIEWS = [(u'[Pri/Ctx]', 'priority', 'contexts'),
@@ -674,7 +681,8 @@ class ViewPanel(Border):
 
 
 class TodoTxtFile(object):
-  """Manages a todo.txt file."""
+  """Manages I/O for a todo.txt file.
+  """
 
   def __init__(self, filename):
     self.filename = filename
