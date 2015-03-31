@@ -13,9 +13,18 @@ import time
 import urwid
 
 
-DIMENSIONS = ('projects', 'contexts', 'priority')
 #TODO_TEXT_FILE = os.path.join(os.path.expanduser('~'), '.todo.txt')
 TODO_TEXT_FILE = os.path.join(os.path.expanduser('~'), 'todo.test.txt')
+
+DIMENSIONS = ('projects', 'contexts', 'priority')
+
+#            LABEL   -  CATEGORY  -  GROUPING
+VIEWS = ((u'[Pri/Ctx]', 'priority', 'contexts'),
+         (u'[Prj/Ctx]', 'projects', 'contexts'),
+         (u'[Prj/Pri]', 'projects', 'priority'),
+         (u'[Ctx/Prj]', 'contexts', 'projects'),
+         (u'[Ctx/Pri]', 'contexts', 'priority'),
+         (u'[Pri/Prj]', 'priority', 'projects'))
 
 
 class Border(urwid.LineBox):
@@ -346,7 +355,6 @@ class VimNavigationListBox(urwid.ListBox):
       if self.VIM_KEYS.has_key(key):
         key = self.VIM_KEYS[key]
 
-
     return super(VimNavigationListBox, self).keypress(size, key)
 
 
@@ -371,8 +379,8 @@ class TaskPile(urwid.Pile):
     if self._mode == 'nav':
       # Enter 'edit' mode
       if key == 'enter' and isinstance(self.focus, Task):
-        self._task = self.focus
-        edit_widget = self._BuildEditWidget(self._task)
+        self._preserved_task = self.focus
+        edit_widget = self._BuildEditWidget(self._preserved_task)
         self.contents[self.focus_position] = (edit_widget, ('pack', None))
         self._mode = 'edit'
         self.tasklistbox.edit_mode = True
@@ -388,16 +396,16 @@ class TaskPile(urwid.Pile):
         # Submit changes if any
         if key == 'enter':
           edit_widget = self.focus.original_widget
-          if self._task.text != edit_widget.get_edit_text():
+          if self._preserved_task.text != edit_widget.get_edit_text():
             # Get before/after properties and update the task itself
-            old_properties = self._task.__dict__.copy()
-            self._task.UpdateFromString(edit_widget.get_edit_text())
-            new_properties = self._task.__dict__.copy()
+            old_properties = self._preserved_task.__dict__.copy()
+            self._preserved_task.UpdateFromString(edit_widget.get_edit_text())
+            new_properties = self._preserved_task.__dict__.copy()
             # Start a chain reaction so all widgets can deal with the changes
             self.tasklistbox.DoTaskChangeWork(old_properties, new_properties)
 
-        self.contents[self.focus_position] = (self._task, ('pack', None))
-        self._task = None
+        self.contents[self.focus_position] = (self._preserved_task, ('pack', None))
+        self._preserved_task = None
         self.tasklistbox.edit_mode = False
         self._mode = 'nav'
         return
@@ -467,10 +475,12 @@ class TaskListBox(VimNavigationListBox):
 
 
 class KeywordPanel(urwid.WidgetPlaceholder):
-  """Panel to hold keywords.
+  """Panel to hold the keywords and allow selection of tasks.
+
   """
 
-  def __init__(self, keywords_dict={}):
+  def __init__(self, app, keywords_dict={}):
+    self.app = app
     self._keywords_dict = keywords_dict
     self._listboxes = {}
     for cat,keywords in self._keywords_dict.items():
@@ -484,20 +494,10 @@ class KeywordPanel(urwid.WidgetPlaceholder):
     super(KeywordPanel, self).__init__(self.border_widget)
 
   def render(self, size, focus=False):
-    if hasattr(self, '_keyword_change_callback'):
-      new_keyword = self.GetSelectedKeyword()
-      self._keyword_change_callback(new_keyword)
+    """Intercept render() in case it's because the selected keyword changed.
+    """
+    self.app.startKeywordChange(self.GetSelectedKeyword(), None)
     return super(KeywordPanel, self).render(size, focus)
-
-  def RegisterKeywordChangeCallback(self, callback):
-    self._keyword_change_callback = callback
-
-  def SwitchCategories(self, new_category):
-    if new_category in self._listboxes:
-      listbox = self._listboxes[new_category]
-      self.padding_widget.original_widget = listbox
-      self.border_widget.set_title(new_category.capitalize())
-      self._selected_category = new_category
 
   def GetKeywords(self, category):
     keywords = []
@@ -510,24 +510,31 @@ class KeywordPanel(urwid.WidgetPlaceholder):
     return keywords
 
   def GetSelectedKeyword(self):
+    """Get the keyword that is selected and in the current view."""
     text = self._listboxes[self._selected_category].focus.text
     if text == '--none--':
       return None
     else:
       return text
 
+  def doViewChange(self, new_view, old_view):
+    new_category,_ = new_view
+    if new_category in self._listboxes:
+      listbox = self._listboxes[new_category]
+      self.padding_widget.original_widget = listbox
+      self.border_widget.set_title(new_category.capitalize())
+      self._selected_category = new_category
+
+  def doKeywordChange(self, new_keyword, old_keyword):
+    return
+
 
 class TaskPanel(urwid.WidgetPlaceholder):
 
-  DIMENSIONS = ('projects', 'contexts', 'priority')
-
-  def __init__(self, tasks, keyword_panel):
+  def __init__(self, app, tasks):
+    self.app = app
     self.tasks = tasks
-    self.keyword_panel = keyword_panel
     self._listboxes = {}
-
-    # Tell the KeywordPanel what function to call when the keyword changes
-    self.keyword_panel.RegisterKeywordChangeCallback(self._KeywordChange)
 
     # We only want to deal with tasks that are incomplete or recently completed
     tasks = []
@@ -542,7 +549,7 @@ class TaskPanel(urwid.WidgetPlaceholder):
     # Build ListBoxes for every permutation of (category, keyword, grouping)
     permutations = itertools.permutations(DIMENSIONS)
     for category, grouping, sorting in permutations:
-      for keyword in self.keyword_panel.GetKeywords(category):
+      for keyword in self.app.keyword_panel.GetKeywords(category):
         # Find matching Tasks
         matching_tasks = []
         for task in tasks:
@@ -594,6 +601,10 @@ class TaskPanel(urwid.WidgetPlaceholder):
     self.grouping = ''
     self.sorting = ''
 
+  def _SetTitle(self):
+    title = 'Tasks by %s' % self.grouping.capitalize()
+    self.border_widget.set_title(title)
+
   def DoTaskChangeWork(self, old_properties, new_properties):
     ########################
     ### Added task
@@ -611,13 +622,14 @@ class TaskPanel(urwid.WidgetPlaceholder):
       for listbox in self._listboxes.values():
         listbox.DoTaskChangeWork(old_properties, new_properties)
 
-  def SelectView(self, category, grouping):
-    self.keyword_panel.SwitchCategories(category)
-    keyword = self.keyword_panel.GetSelectedKeyword()
+  def doViewChange(self, new_view, old_view):
+    category, grouping = new_view
+    keyword = self.app.keyword_panel.GetSelectedKeyword()
+
     listbox = self._listboxes[(category, keyword, grouping)]
     self.padding_widget.original_widget = listbox
 
-    # Sorting dimension is whatever is not our category or grouping dimension
+    # We sort by whatever is not the category or grouping dimension
     sorting = set(DIMENSIONS).difference((category, grouping)).pop()
 
     self.category = category
@@ -626,11 +638,7 @@ class TaskPanel(urwid.WidgetPlaceholder):
 
     self._SetTitle()
 
-  def _SetTitle(self):
-    title = 'Tasks by %s' % self.grouping.capitalize()
-    self.border_widget.set_title(title)
-
-  def _KeywordChange(self, new_keyword):
+  def doKeywordChange(self, new_keyword, old_keyword):
     listbox = self._listboxes[(self.category, new_keyword, self.grouping)]
     self.padding_widget.original_widget = listbox
     self._SetTitle()
@@ -643,41 +651,39 @@ class ViewPanel(Border):
   changed, that event can be passed on to the TaskPanel to react to it.
   """
 
-  #            LABEL   -  CATEGORY  -  GROUPING
-  VIEWS = [(u'[Pri/Ctx]', 'priority', 'contexts'),
-           (u'[Prj/Ctx]', 'projects', 'contexts'),
-           (u'[Prj/Pri]', 'projects', 'priority'),
-           (u'[Ctx/Prj]', 'contexts', 'projects'),
-           (u'[Ctx/Pri]', 'contexts', 'priority'),
-           (u'[Pri/Prj]', 'priority', 'projects')]
+  def __init__(self, app):
+    self.app = app
 
-  def __init__(self, task_panel):
-    #self.keyword_panel = keyword_panel
-    self.task_panel = task_panel
+    # Create urwid.Text widgets and save them in a mapping
+    text_widgets = {}
+    for label, category, grouping in VIEWS:
+      view = (category, grouping)
+      text_widgets[view] = urwid.Text(('normal', label))
+    self.text_widgets = text_widgets
 
-    self.text_widgets = [urwid.Text(('normal', V[0])) for V in ViewPanel.VIEWS]
-    widget = urwid.Columns([(11, t) for t in self.text_widgets])
+    # Place urwid.Text widgets in the UI
+    widget = urwid.Columns([(11, text_widgets[V[1:]]) for V in VIEWS])
     widget = urwid.Padding(widget, left=1)
     super(ViewPanel, self).__init__(widget)
 
-    self._selected_index = -1
-    self.SelectView(1)
+    # Select first view
+    # FIXME: this is already done in Application.__init__ no?
+    self.selected_view = VIEWS[1][1:]
+    self.doViewChange(VIEWS[0][1:], None)
 
-  def SelectView(self, view):
-    index = view - 1
-    if self._selected_index == index:
+  def doViewChange(self, new_view, old_view):
+    """Select a new view."""
+    if new_view == self.selected_view:
       return
-    if index in range(len(self.text_widgets)):
-      # Select new view
-      old_widget = self.text_widgets[self._selected_index]
-      new_widget = self.text_widgets[index]
-      old_widget.set_text(('normal', old_widget.text))
-      new_widget.set_text(('selected', new_widget.text))
-      self._selected_index = index
 
-      # Update TaskPanel (which updates KeywordPanel)
-      label, category, grouping = ViewPanel.VIEWS[index]
-      self.task_panel.SelectView(category, grouping)
+    old_widget = self.text_widgets[self.selected_view]
+    new_widget = self.text_widgets[new_view]
+    old_widget.set_text(('normal', old_widget.text))
+    new_widget.set_text(('selected', new_widget.text))
+    self.selected_view = new_view
+
+  def doKeywordChange(self, new_keyword, old_keyword):
+    return
 
 
 class TodoTxtFile(object):
@@ -722,7 +728,48 @@ class TodoTxtFile(object):
 
 
 class Application(object):
-  """Main application.
+  """Main application to handle run state and event propagation.
+
+  [Events]
+  Since this is quite a modest-sized program, I don't want to introduce a
+  message-passing framework or include a more robust/feature-rich one as a
+  dependency. However, the job still needs to get done for a few basic things
+  and the best way to handle that is for widgets "lower down" to tell the
+  application about the event and the application then alerts everyone else by
+  calling special functions. This is nothing fancy (nor should it be) and it is
+  not even async in any way. It's just dumb message passing.
+
+  Initially I did this by having widgets reference other widget if they needed
+  to communicate in any way. However, most widgets ended up needing a reference
+  to at least some other widget and I writing special code for each pair. This
+  got hard to keep up. So I went all the way up the chain and decided to start
+  over again with a fresh design pattern and some "standard" function calls. If
+  an event happens that something else needs to know about, it only tells the
+  application and the application can then run through and tell everybody else.
+  Those to whome it does not concern will ignore it. The others will do
+  something about it.
+
+
+  [Application Layout]
+  The application has a static top bar, the ViewPanel, from which a particular
+  view of the tasks can be chosen. Once a view is known, a set of keywords is
+  created in the KeywordPanel, which is always on the left of the screen. These
+  keywords determine what set of tasks get put in the TaskPanel. The TaskPanel
+  has a subset of the tasks, grouped by either their project, context or priority.
+
+
+      +----------------------------------------------+
+      |                  ViewPanel                   |
+      +---------+------------------------------------+
+      |         |                                    |
+      |         |                                    |
+      | Keyword |             TaskPanel              |
+      |  Panel  |                                    |
+      |         |                                    |
+      |         |                                    |
+      |         |                                    |
+      +---------+------------------------------------+
+
   """
 
   PALETTE = [('normal',          '',            ''),
@@ -737,25 +784,44 @@ class Application(object):
     keywords =  {'projects': sorted(set(p for t in tasks for p in t.projects)),
                  'contexts': sorted(set(c for t in tasks for c in t.contexts)),
                  'priority': sorted(set(t.priority for t in tasks))}
-    self.keyword_panel = KeywordPanel(keywords)
-    self.keyword_panel.SwitchCategories('priority')
-    self.task_panel = TaskPanel(tasks, self.keyword_panel)
-    self.task_panel.SelectView('priority', 'contexts')
-    self.view_panel = ViewPanel(self.task_panel)
+    self.keyword_panel = KeywordPanel(self, keywords)
+    self.task_panel = TaskPanel(self, tasks)
+    self.view_panel = ViewPanel(self)
     columns = urwid.Columns([(30, self.keyword_panel), self.task_panel], focus_column=0)
     self.browser = urwid.Frame(columns, header=self.view_panel)
 
+    self.startViewChange(VIEWS[0][1:], None)
+
   def _UnhandledInput(self, key):
+    # Exit program
     if key == 'esc':
       raise urwid.ExitMainLoop()
+
+    # Select view
     elif key.isdigit():
-      self.view_panel.SelectView(int(key))
+      index = int(key)
+      if index > 0 and index <= len(VIEWS):
+        new_view = VIEWS[index -1][1:]
+        old_view = self.view_panel.selected_view
+        self.startViewChange(new_view, old_view)
 
   def Run(self):
     self.main_loop = urwid.MainLoop(self.browser,
                                     palette=Application.PALETTE,
                                     unhandled_input=self._UnhandledInput)
     self.main_loop.run()
+
+  def startViewChange(self, new_view, old_view):
+    """Master doViewChange function which calls the others."""
+    self.view_panel.doViewChange(new_view, old_view)
+    self.keyword_panel.doViewChange(new_view, old_view)
+    self.task_panel.doViewChange(new_view, old_view)
+
+  def startKeywordChange(self, new_keyword, old_keyword):
+    """Master doKeywordChange function which calls the others."""
+    self.view_panel.doKeywordChange(new_keyword, old_keyword)
+    self.keyword_panel.doKeywordChange(new_keyword, old_keyword)
+    self.task_panel.doKeywordChange(new_keyword, old_keyword)
 
 
 def main():
