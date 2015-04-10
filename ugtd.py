@@ -1,6 +1,148 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 
+"""ncurses Python application for "Getting Things Done".
+
+
+[Methodology - Getting Things Done]
+
+
+[Method - Todo.txt]
+Todo.txt is a text data format designed to store personal task data. It follows
+philosophies of simplicity, portability and functionality.
+
+More details here:
+
+    http://todotxt.com/
+
+
+Todo.txt is intending to follow the GTD methodology. It does do this but it
+also, by necessity, imposes a specifc approach to the GTD methodology. This is
+why I see it as a "method" more than just a format.
+
+The creators do a fairly good job of explaining this method here:
+
+    https://github.com/ginatrapani/todo.txt-cli/wiki/The-Todo.txt-Format
+
+
+Salient point about this method are:
+ - Meta-data about tasks only includes dates, completion, priority, projects and
+   contexts.
+ - There is no nesting of priority, projects or contexts. Your tasks are "flat".
+ - Dates to do not include time.
+ - Priorities are letters only, not numbers.
+ - All meta data can be written right into your task description.
+
+
+[TaskWarrior - What It Got Wrong]
+TaskWarrior is a command-line tool for implementing personal task management and
+is probably the most popular one. TaskWarrior has good documentation and can be
+used to facilitate a GTD methodology. It has a proven track-record of being very
+useful and facilating productivity among those of us who still use the terminal.
+
+Besides inventing it's own serialization format (they could have just use JSON,
+no?), I found a few things frustrating about it to the point where I stopped
+using it altogether. I thought and though about my experience with TaskWarrior
+and the many other task management apps I tried out. I really wanted something
+that I could use on a powerful UNIX shell but something about TaskWarrior just
+didn't make it work right for me. Then I realized what it was: context.
+
+No, not "context" in the todo.txt sense (mentioned above). Context, as in, what
+is happening in my head as I work through my task list. It's the thing that GUI
+applications have that terminal applications can't have. With a GUI app, I can
+instantly and visually see all of my tasks. I can then pluck out ones I need to
+change (mark "done"!) and move on. All the GUI apps focussed on the right
+thing: presenting the tasks and allowing me to take my sweet time to decide what
+to do. TaskWarrior could not do this. It presented the data, then would exit.
+Once I figured out what to do, I told TaskWarrior through lots of typing and
+then it happened. But I sacrificed context. I had to reprint the list again to
+decide on the next thing to do.
+
+By the time I had done my morning routine, my fingers were tired and I had a
+feeling of not quite remembering what changes I had done. The problem was that
+I could perform an action or get context (print tasks) but not both. Every time
+I got context, I had to lose it to do something and then go back and get it
+again.
+
+Another problem was all the typing. If you look at your command history, you'll
+see a lot of the same patterns over and over again with very few things changed.
+This is an indicator that the user is being asked to do a lot of overhead to do
+something simple.
+
+"But that's what you do on a terminal!" Yes, but not if you have to do the same
+thing over and over again. The terminal is a user interface and every terminal
+application needs to strive to be as user-friendly as possible. If you're
+making a website or a GUI app, you focus on how users go through the app and
+use the essential functions of it. You care and you modify the design to appeal
+to more users and make things easy without sacrificing functionality. Why should
+a terminal application not do the same?
+
+
+So TaskWarrior sucks at presenting a persistent context from which I can make
+multiple decisions on. And TaskWarrior makes me type a lot of stuff for it.
+Those two things made it a very user-unfriendly application for me. As a result,
+I had to stop using it, no matter how many features it had.
+
+
+[Application - Task Menu]
+Like any good programmer (is that what I am?) I decided to write something that
+took a different approach, in hopes that it would be useful to me and possibly
+others.
+
+Task Menu, is a curses-based application. This gives it the contextual power of
+the GUI apps but the portability and leaness of a terminal app. It's the best
+of both worlds!
+
+Task Menu also applies a limited set of "views" you can have on your tasks. It
+removed the ability for you, the user, to add new views or customize in that
+way. This is another deviation from TaskWarrior which boasts customization.
+
+I believe that by making the app ncurses-based and by having pre-defined views,
+you, the user, can use your brain for what it's supposed to be used for: task
+management.
+
+There are generally 2 "modes" that your brain is in right before you fire up
+your personal task management system: 1) you don't remember what needed to be
+done and you need to see it OR 2) you have something very specific in mind that
+you need to do and just want to do it.
+
+For scenario #1, you need a way to see lots of tasks at once and scroll through
+them if needed. curses works for this.
+
+For scenario #2, you need to type as little as possible to tell the application
+what to do. curses again words great because your enviornment (your context) is
+already there, so all you need to do is hit a single key and something can
+happen ("done"!).
+
+
+[So why the limited number of views?]
+Given the Todo.txt method, with it's "3 axis" of tasks, it turns out that we can
+pivot off of those axis in 6 possible ways (3 factorial, for you math nerds).
+They are:
+
+   - By Priority then Project
+   - By Priority then Context
+   - By Project  then Priority
+   - By Project  then Context
+   - By Context  then Priority
+   - By Context  then Project
+
+You pivot off of one of then first, that leaves only 2 more "axis" to pivot
+from. So you pivot off of the second one, and that leaves you with the last
+remaining "axis" automatically. From those two pivot points, the application
+can know everything it needs to present to you a filtered view of the tasks
+that match that criteria.
+
+And THAT is how Task Menu works. Since each tasks contains all its meta-data
+already, all you need to see is the task itself. Thus, the only possible
+variations you could have come from the "axis" themselves.
+
+
+I don't know if Todo.txt intended this as a consequence. But the data itself
+makes this possible.
+
+"""
+
 import collections
 import datetime
 import inspect
